@@ -4,85 +4,77 @@ import matplotlib
 matplotlib.use('Agg')  # Ensure non-interactive mode
 import matplotlib.pyplot as plt
 from scipy import stats
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import GridSearchCV
 
-# Load the dataset
+# Load dataset
 df = pd.read_csv("WA_Fn-UseC_-Telco-Customer-Churn.csv")
 
-# Display basic information about the dataset
-print("Dataset Overview:\n")
-print(df.head())
-print("\nSummary:\n")
-print(df.info())
-print("\nMissing Values:\n")
-print(df.isnull().sum())
-
-# ✅ Convert 'TotalCharges' to numeric
+# ✅ Convert 'TotalCharges' to numeric (handle missing values)
 df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
+df['TotalCharges'] = df['TotalCharges'].fillna(df['TotalCharges'].median())
+
 
 # ✅ Convert 'Churn' to binary (Yes=1, No=0)
 df['Churn'] = df['Churn'].apply(lambda x: 1 if x == 'Yes' else 0)
 
-# ------------------------
-# ✅ Data Visualization
-# ------------------------
+# ✅ Drop customerID (not useful for predictions)
+df.drop(columns=['customerID'], inplace=True)
 
-# 1️⃣ Boxplot: MonthlyCharges vs Churn
-plt.figure(figsize=(10, 6))
-sns.boxplot(x='Churn', y='MonthlyCharges', data=df)
-plt.title('Monthly Charges vs Churn')
-plt.xlabel('Churn (1 = Yes, 0 = No)')
-plt.ylabel('Monthly Charges')
-plt.savefig("monthly_charges_vs_churn.png")  # Save plot
-plt.close()
-
-# 2️⃣ Correlation Heatmap
-corr_matrix = df[['tenure', 'MonthlyCharges', 'TotalCharges', 'Churn']].corr()
-plt.figure(figsize=(8, 6))
-sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt='.2f')
-plt.title('Correlation Heatmap')
-plt.savefig("correlation_heatmap.png")  # Save plot
-plt.close()
-
-# 3️⃣ Countplot: Gender vs Churn
-plt.figure(figsize=(8, 6))
-sns.countplot(x='gender', hue='Churn', data=df)
-plt.title('Churn by Gender')
-plt.savefig("churn_by_gender.png")  # Save plot
-plt.close()
-
-# 4️⃣ Countplot: Partner vs Churn
-plt.figure(figsize=(8, 6))
-sns.countplot(x='Partner', hue='Churn', data=df)
-plt.title('Churn by Partner')
-plt.savefig("churn_by_partner.png")  # Save plot
-plt.close()
+# ✅ One-Hot Encoding for categorical variables
+df = pd.get_dummies(df, drop_first=True)
 
 # ------------------------
-# ✅ Hypothesis Testing
+# 🔥 Model Training
 # ------------------------
 
-# 5️⃣ T-test: MonthlyCharges between churned and non-churned customers
-churned = df[df['Churn'] == 1]['MonthlyCharges']
-non_churned = df[df['Churn'] == 0]['MonthlyCharges']
+# Split dataset into training and testing sets
+X = df.drop(columns=['Churn'])  # Features
+y = df['Churn']  # Target
 
-t_stat, p_val = stats.ttest_ind(churned, non_churned)
-print("\nT-test for Monthly Charges & Churn:")
-print(f"T-statistic: {t_stat}")
-print(f"P-value: {p_val}")
+# Handle class imbalance using SMOTE
+smote = SMOTE(random_state=42)
+X_resampled, y_resampled = smote.fit_resample(X, y)
 
-if p_val < 0.05:
-    print("✅ Significant difference: Monthly Charges affects Churn.")
-else:
-    print("❌ No significant difference: Monthly Charges does NOT affect Churn.")
+# Train-Test Split (80-20)
+X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
 
-# 6️⃣ Chi-Square Test: Relationship between Partner and Churn
-contingency = pd.crosstab(df['Partner'], df['Churn'])
-chi2, p_val, _, _ = stats.chi2_contingency(contingency)
-print("\nChi-Square Test for Partner & Churn:")
-print(f"Chi-Square Statistic: {chi2}")
-print(f"P-value: {p_val}")
+# ✅ Standardization
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
 
-if p_val < 0.05:
-    print("✅ Significant relationship: Having a Partner affects Churn.")
-else:
-    print("❌ No significant relationship: Partner status does NOT affect Churn.")
+# ✅ Hyperparameter Tuning for RandomForest
+param_grid = {
+    'n_estimators': [100, 200],
+    'max_depth': [10, 20, None],
+    'min_samples_split': [2, 5]
+}
+
+rf = RandomForestClassifier(random_state=42)
+grid_search = GridSearchCV(rf, param_grid, cv=3, scoring='accuracy', n_jobs=-1)
+grid_search.fit(X_train, y_train)
+
+# ✅ Train the best model
+best_rf = grid_search.best_estimator_
+y_pred = best_rf.predict(X_test)
+
+# ✅ Model Evaluation
+accuracy = accuracy_score(y_test, y_pred)
+print(f"\n🎯 Model Accuracy: {accuracy:.2f}")
+
+print("\n📊 Classification Report:")
+print(classification_report(y_test, y_pred))
+
+print("\n🟩 Confusion Matrix:")
+print(confusion_matrix(y_test, y_pred))
+
+# Save the trained model
+import joblib
+joblib.dump(best_rf, "churn_prediction_model.pkl")

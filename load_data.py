@@ -1,7 +1,7 @@
 import pandas as pd
 import seaborn as sns
 import matplotlib
-matplotlib.use('Agg')  # Ensure non-interactive mode
+matplotlib.use('Agg')  
 import matplotlib.pyplot as plt
 from scipy import stats
 from sklearn.model_selection import train_test_split
@@ -12,45 +12,37 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from imblearn.over_sampling import SMOTE
 from sklearn.model_selection import GridSearchCV
+import shap
+import lime
+from lime.lime_tabular import LimeTabularExplainer
+import joblib
+import numpy as np
 
-# Load dataset
+
 df = pd.read_csv("WA_Fn-UseC_-Telco-Customer-Churn.csv")
 
-# ✅ Convert 'TotalCharges' to numeric (handle missing values)
 df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
 df['TotalCharges'] = df['TotalCharges'].fillna(df['TotalCharges'].median())
 
-
-# ✅ Convert 'Churn' to binary (Yes=1, No=0)
 df['Churn'] = df['Churn'].apply(lambda x: 1 if x == 'Yes' else 0)
 
-# ✅ Drop customerID (not useful for predictions)
 df.drop(columns=['customerID'], inplace=True)
 
-# ✅ One-Hot Encoding for categorical variables
 df = pd.get_dummies(df, drop_first=True)
 
-# ------------------------
-# 🔥 Model Training
-# ------------------------
 
-# Split dataset into training and testing sets
-X = df.drop(columns=['Churn'])  # Features
-y = df['Churn']  # Target
+X = df.drop(columns=['Churn'])  
+y = df['Churn']  
 
-# Handle class imbalance using SMOTE
 smote = SMOTE(random_state=42)
 X_resampled, y_resampled = smote.fit_resample(X, y)
 
-# Train-Test Split (80-20)
 X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
 
-# ✅ Standardization
 scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
-# ✅ Hyperparameter Tuning for RandomForest
 param_grid = {
     'n_estimators': [100, 200],
     'max_depth': [10, 20, None],
@@ -61,11 +53,9 @@ rf = RandomForestClassifier(random_state=42)
 grid_search = GridSearchCV(rf, param_grid, cv=3, scoring='accuracy', n_jobs=-1)
 grid_search.fit(X_train, y_train)
 
-# ✅ Train the best model
 best_rf = grid_search.best_estimator_
 y_pred = best_rf.predict(X_test)
 
-# ✅ Model Evaluation
 accuracy = accuracy_score(y_test, y_pred)
 print(f"\n🎯 Model Accuracy: {accuracy:.2f}")
 
@@ -75,6 +65,50 @@ print(classification_report(y_test, y_pred))
 print("\n🟩 Confusion Matrix:")
 print(confusion_matrix(y_test, y_pred))
 
-# Save the trained model
 import joblib
-joblib.dump(best_rf, "churn_prediction_model.pkl")
+joblib.dump(best_rf, "best_rf_model.pkl")
+
+joblib.dump(scaler, "scaler.pkl")
+
+columns = X.columns.tolist()
+joblib.dump(columns, 'columns.pkl')  
+
+X_test_scaled = scaler.transform(X_test)  
+
+background_data = X_train[np.random.choice(X_train.shape[0], 100, replace=False)]
+
+explainer = shap.TreeExplainer(best_rf, background_data, feature_perturbation="interventional")
+
+
+shap_values = explainer.shap_values(X_test_scaled)
+
+if isinstance(shap_values, list):  
+    shap_values_selected = shap_values[1]  
+else:
+    shap_values_selected = shap_values  
+
+shap_values_selected = shap_values_selected[:, :, 1]  
+
+print(f"Shape of shap_values_selected: {shap_values_selected.shape}")
+print(f"Shape of X_test_scaled: {X_test_scaled.shape}")
+
+shap.summary_plot(shap_values_selected, X_test_scaled, feature_names=X.columns)
+
+if "TotalCharges" in X.columns:
+    shap.dependence_plot("TotalCharges", shap_values_selected, X_test_scaled, feature_names=X.columns)
+else:
+    print("TotalCharges is not a valid feature in the dataset.")
+
+shap.initjs()
+shap.force_plot(explainer.expected_value[1], shap_values_selected[0], X_test_scaled[0], matplotlib=True)
+
+explainer = LimeTabularExplainer(
+    X_train, 
+    feature_names=X.columns.tolist(), 
+    class_names=['No Churn', 'Churn'], 
+    discretize_continuous=True
+)
+
+i = 0  
+exp = explainer.explain_instance(X_test_scaled[i], best_rf.predict_proba, num_features=5)
+exp.show_in_notebook()
